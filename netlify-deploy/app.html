@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <html lang="vi">
 <head>
-<meta name="lifeos-app" content="1"><meta name="lifeos-build" content="18/11/2026 14:01">
+<meta name="lifeos-app" content="1"><meta name="lifeos-build" content="18/11/2026 15:01">
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Life OS</title>
@@ -5350,7 +5350,12 @@ const MONEY3_A = {
    Bản trên web là một trang khởi động nhỏ: mỗi lần mở, nó tải file app mới nhất từ “nguồn cập nhật” (một file trên GitHub),
    lỗi mạng thì dùng bản đã tải lần trước, chưa đặt nguồn thì dùng bản gốc đi kèm. Nguồn được lưu trong cài đặt (đồng bộ sang các máy). */
 const UPD_KEY = 'lifeos.updsrc';
-function updNorm(u) { u = String(u || '').trim(); const m = u.match(/^https:\/\/github\.com\/([^/]+)\/([^/]+)\/(?:blob|raw)\/([^/]+)\/(.+)$/); return m ? `https://raw.githubusercontent.com/${m[1]}/${m[2]}/${m[3]}/${m[4]}` : u; }
+// Nhận mọi dạng link GitHub: link file (blob), link thư mục (tree: tự thêm app.html), link kho (lấy app.html ở thư mục gốc)
+function updNorm(u) { u = String(u || '').trim().replace(/[?#].*$/, '').replace(/\/+$/, '');
+  let m = u.match(/^https:\/\/github\.com\/([^/]+)\/([^/]+)\/(blob|raw|tree)\/([^/]+)(?:\/(.*))?$/);
+  if (m) { let f = m[5] || ''; if (m[3] === 'tree' || !/\.html?$/i.test(f)) f = (f ? f + '/' : '') + 'app.html'; return `https://raw.githubusercontent.com/${m[1]}/${m[2]}/${m[4]}/${f}`; }
+  m = u.match(/^https:\/\/github\.com\/([^/]+)\/([^/]+)$/); if (m) return `https://raw.githubusercontent.com/${m[1]}/${m[2]}/main/app.html`;
+  return u; }
 function updMirror() { try { const v = (state.cfg && state.cfg.updSrc) || ''; if ((localStorage.getItem(UPD_KEY) || '') !== v) v ? localStorage.setItem(UPD_KEY, v) : localStorage.removeItem(UPD_KEY); } catch (e) {} }
 setInterval(() => { try { updMirror(); } catch (e) {} }, 4000);
 const updBuildOf = t => (String(t).match(/name="lifeos-build" content="([^"]+)"/) || [])[1] || '';
@@ -5360,7 +5365,7 @@ function updCard() {
   return `<div class="card pad mt-4"><h2 class="h2 mb-1">🛠 Quản trị & cập nhật app</h2>
     <p class="muted small mb-2">Cập nhật app bằng cách tải file mới lên kho GitHub của bạn, không cần deploy lại trang web. Mỗi lần mở, app tự lấy bản mới nhất từ link dưới đây; mất mạng thì dùng bản đã tải lần trước.</p>
     <div class="small mb-2">Đang chạy: <b>${from ? FROM[from] || from : 'file trên máy (không qua trang khởi động)'}</b>${b ? ` · bản dựng ${esc(b)}` : ''}</div>
-    ${from ? `<label class="label" for="upd-src">Link file app trên GitHub</label><input id="upd-src" class="input" value="${esc(src)}" placeholder="https://github.com/ten-ban/life-os/blob/main/life-os-app.html">
+    ${from ? `<label class="label" for="upd-src">Link file app trên GitHub</label><input id="upd-src" class="input" value="${esc(src)}" placeholder="https://github.com/ten-ban/life-os/blob/main/netlify-deploy/app.html">
       <div class="flex gap-2 flex-wrap mt-2"><button class="btn btn-primary btn-sm" data-act="upd-test">Kiểm tra & lưu</button><button class="btn btn-line btn-sm" data-act="upd-reload">Mở lại để lấy bản mới</button>${src ? '<button class="btn btn-ghost btn-sm" data-act="upd-off">Bỏ nguồn, dùng bản gốc</button>' : ''}</div>
       <p class="tiny muted mt-2" id="upd-msg">${src ? 'Đã đặt nguồn cập nhật: các máy khác nhận theo sau khi đồng bộ.' : 'Chưa đặt nguồn: đang dùng bản gốc đi kèm trang web.'} Nếu bản mới bị lỗi, mở trang với đuôi <b>?ban=goc</b> để chạy bản gốc rồi sửa link.</p>` : '<p class="tiny muted">Phần này dùng cho bản trên web.</p>'}</div>`;
 }
@@ -5369,9 +5374,10 @@ const UPD_A = {
     if (!/^https:\/\//.test(u)) return toast('Link phải bắt đầu bằng https://');
     msg.textContent = 'Đang kiểm tra…';
     try { const r = await fetch(u + (u.includes('?') ? '&' : '?') + 't=' + Date.now(), { cache: 'no-store' }); if (!r.ok) throw new Error('HTTP ' + r.status);
-      const t = await r.text(); if (!t.includes('name="lifeos-app"')) throw new Error('không phải file Life OS');
+      const t = await r.text(); if (/id=["']ldm["']/.test(t) || t.length < 200000) throw new Error('đây là trang khởi động (index.html), cần link tới file app.html');
+      if (!t.includes('name="lifeos-app"')) throw new Error('không phải file app Life OS');
       state.cfg.updSrc = u; updMirror(); commit(); toast('Đã lưu nguồn cập nhật · bản dựng ' + (updBuildOf(t) || '?'));
-    } catch (e) { msg.innerHTML = `<span class="t-red">Không tải được: ${esc(e.message)}. Kiểm tra kho để chế độ Public và link đúng tên file.</span>`; } },
+    } catch (e) { msg.innerHTML = `<span class="t-red">Không dùng được link này: ${esc(/fetch/i.test(e.message) ? 'không tải được (kho phải để Public, link phải là file app.html)' : e.message)}.</span><br>Đã thử: ${esc(u)}`; } },
   'upd-reload': () => { updMirror(); location.reload(); },
   'upd-off': el => twoClick(el, 'Bấm lần nữa: bỏ nguồn cập nhật', () => { state.cfg.updSrc = ''; updMirror(); commit(); toast('Đã bỏ nguồn cập nhật, lần mở sau dùng bản gốc'); }),
 };
