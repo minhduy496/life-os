@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <html lang="vi">
 <head>
-<meta name="lifeos-app" content="1"><meta name="lifeos-build" content="18/11/2026 15:39">
+<meta name="lifeos-app" content="1"><meta name="lifeos-build" content="18/11/2026 16:01">
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Life OS</title>
@@ -4824,31 +4824,43 @@ function xfForm(x, pre) {
   const n = $('#mform'); if (n) n.insertAdjacentHTML('afterbegin', '<p class="tiny muted mb-2">Chuyển tiền và trả thẻ tín dụng không tính là thu hay chi.</p>');
 }
 function wPayForm(w) {
-  const i = cardInfo(w);
-  openForm({ title: 'Trả thẻ ' + wName(w), saveLabel: 'Ghi đã trả', values: { amount: i ? i.need || 0 : Math.max(0, wBal(w)), from: w.payFrom || state.cfg.lastWxf || '', date: iso(today()), note: '' },
-    fields: [{ key: 'amount', label: 'Số tiền trả (₫)', type: 'money', required: true, k: true }, { key: 'from', label: 'Trả từ ví', type: 'select', options: wOpts(x => !isCredit(x), '— Nguồn ngoài —'), half: true }, { key: 'date', label: 'Ngày trả', type: 'date', half: true }, { key: 'note', label: 'Ghi chú' }],
-    onSave: v => { state.xfers.push({ id: uid(), kind: 'pay', to: w.id, ...v }); if (v.from) w.payFrom = v.from; toast(`Đã ghi trả thẻ ${money(v.amount)}`); } });
-  const n = $('#mform'); if (n && i) n.insertAdjacentHTML('afterbegin', `<p class="small mb-2">Dư nợ hiện tại <b>${money(wBal(w))}</b>${i.done ? '' : ` · cần trả cho hạn ${fmtShort(parseISO(i.due))}: <b>${money(i.need)}</b>`}</p>`);
+  const i = cardInfo(w), sFee = i && i.s ? state.out.find(o => o.w === w.id && o.stmtFee === i.s) : null;
+  openForm({ title: 'Trả thẻ ' + wName(w), saveLabel: 'Ghi đã trả', values: { amount: i ? i.need || 0 : Math.max(0, wBal(w)), from: w.payFrom || state.cfg.lastWxf || '', date: iso(today()), note: '', feeAmt: 0 },
+    fields: [{ key: 'amount', label: 'Số tiền trả (₫)', type: 'money', required: true, k: true }, { key: 'from', label: 'Trả từ ví', type: 'select', options: wOpts(x => !isCredit(x), '— Nguồn ngoài —'), half: true }, { key: 'date', label: 'Ngày trả', type: 'date', half: true },
+      ...(sFee ? [] : [{ key: 'feeAmt', label: 'Phí & lãi trên sao kê kỳ này (₫, nếu có và chưa ghi)', type: 'money', k: true }]), { key: 'note', label: 'Ghi chú' }],
+    onSave: v => { const fee = v.feeAmt || 0, needBefore = i && !i.done ? i.need : 0; delete v.feeAmt;
+      if (fee > 0) { if (!state.cfg.expCats.includes(FEE_CAT)) state.cfg.expCats.push(FEE_CAT); const sd = i && i.s && i.s <= v.date ? i.s : v.date;
+        state.out.push({ id: uid(), date: sd, item: 'Phí & lãi thẻ ' + wName(w) + (i && i.s ? ' (sao kê ' + fmtShort(parseISO(i.s)) + ')' : ''), cat: FEE_CAT, amount: fee, note: '', loan: '', w: w.id, stmtFee: i && i.s ? i.s : undefined }); }
+      state.xfers.push({ id: uid(), kind: 'pay', to: w.id, ...v }); if (v.from) w.payFrom = v.from;
+      const kyNay = Math.min(v.amount, needBefore + (needBefore && fee && !(i.st && i.st.amt) ? fee : 0)), them = v.amount - kyNay;
+      toast(`Đã ghi trả thẻ ${money(v.amount)}${kyNay && them > 0 ? `: ${money(kyNay)} cho kỳ này + ${money(them)} giảm dư nợ cũ` : ''}${fee ? ` · phí & lãi ${money(fee)} ghi thành chi` : ''}`, 6000); } });
+  const n = $('#mform'); if (n && i) n.insertAdjacentHTML('afterbegin', `<p class="small mb-2">Dư nợ hiện tại <b>${money(wBal(w))}</b>${i.done ? '' : ` · cần trả cho hạn ${fmtShort(parseISO(i.due))}: <b>${money(i.need)}</b>`}. Trả nhiều hơn thì phần dư tự trừ vào dư nợ cũ.${sFee ? ` Phí & lãi kỳ này ${money(sFee.amount)} đã ghi lúc nhập sao kê.` : ''}<br><span class="tiny muted">Các khoản quẹt đã tính vào từng mục chi lúc quẹt, nên trả thẻ chỉ là chuyển tiền, không tính chi lần nữa.</span></p>`);
 }
 function wRecoForm(w) {
   const cr = isCredit(w), app = wBal(w);
-  openForm({ title: 'Đối chiếu ' + wName(w), saveLabel: 'Lưu', values: { amt: Math.max(0, app), date: iso(today()), exp: false },
+  openForm({ title: 'Đối chiếu ' + wName(w), saveLabel: 'Lưu', values: { amt: Math.max(0, app), date: iso(today()), exp: cr },
     fields: [{ key: 'amt', label: cr ? 'Dư nợ đang hiện trên app ngân hàng (₫)' : 'Số dư đang hiện trên app ngân hàng / ví (₫)', type: 'money' }, { key: 'date', label: 'Ngày', type: 'date' },
-      { key: 'exp', label: '', type: 'checkbox', text: cr ? 'Phần dư nợ tăng thêm là phí / lãi: ghi thành khoản chi “Phí & lãi ngân hàng”' : 'Phần tiền thiếu là chi tiêu chưa ghi: ghi thành khoản chi “Chi chưa ghi rõ”' }],
+      { key: 'exp', label: '', type: 'checkbox', text: cr ? 'Phần dư nợ tăng thêm là phí / lãi: ghi thành khoản chi “' + FEE_CAT + '”' : 'Phần tiền thiếu là chi tiêu chưa ghi: ghi thành khoản chi “Chi chưa ghi rõ”' }],
     onSave: v => { const base = wBal(w, v.date), diff = v.amt - base; w.recoAt = v.date;
       if (!diff) return toast('Khớp với app ✓');
-      if (v.exp && (cr ? diff > 0 : diff < 0)) { const cat = cr ? 'Phí & lãi ngân hàng' : 'Chi chưa ghi rõ'; if (!state.cfg.expCats.includes(cat)) state.cfg.expCats.push(cat);
+      if (v.exp && (cr ? diff > 0 : diff < 0)) { const cat = cr ? FEE_CAT : 'Chi chưa ghi rõ'; if (!state.cfg.expCats.includes(cat)) state.cfg.expCats.push(cat);
         state.out.push({ id: uid(), date: v.date, item: cr ? 'Phí / lãi thẻ (đối chiếu)' : 'Chi chưa ghi (đối chiếu)', cat, amount: Math.abs(diff), note: '', loan: '', w: w.id }); toast(`Đã ghi khoản chi ${money(Math.abs(diff))}`); }
       else { state.wadj.push({ id: uid(), w: w.id, date: v.date, delta: diff, note: '' }); toast(`Đã chỉnh ${diff > 0 ? '+' : '−'}${money(Math.abs(diff))} cho khớp`); } } });
   const n = $('#mform'); if (n) n.insertAdjacentHTML('afterbegin', `<p class="small mb-2">Life OS đang tính: <b>${money(app)}</b>. Nhập số trên app ngân hàng, phần chênh lệch sẽ được ghi để hai bên khớp nhau.</p>`);
 }
 function wStmtForm(w, s0) {
   const i0 = cardInfo(w), i = s0 ? { s: s0 } : i0; if (!i || !i.s) return; const app = w.openDate && i.s < w.openDate ? null : wBal(w, i.s), st = (w.stmts || {})[i.s] || {};
-  openForm({ title: `Sao kê ngày ${fmtShort(parseISO(i.s))} · ${wName(w)}`, saveLabel: 'Lưu', values: { amt: st.amt || 0, min: st.min || 0 },
-    fields: [{ key: 'amt', label: 'Số tiền phải thanh toán trên sao kê (₫)', type: 'money', required: true, half: true }, { key: 'min', label: 'Thanh toán tối thiểu (₫)', type: 'money', half: true }],
-    onSave: v => { w.stmts = w.stmts || {}; w.stmts[i.s] = { amt: v.amt, min: v.min }; const d = app === null ? 0 : v.amt - app;
-      toast(`Đã lưu: kỳ này cần trả ${money(v.amt)}`); } });
-  const n = $('#mform'); if (n) n.insertAdjacentHTML('afterbegin', `<p class="small mb-2">${app === null ? 'Kỳ này trước ngày bắt đầu theo dõi nên app chưa có số để so.' : `Theo app, dư nợ ngày ${fmtShort(parseISO(i.s))} là <b>${money(app)}</b>.`} Số cần trả sẽ lấy theo sao kê.</p>`);
+  const feeO = state.out.find(o => o.w === w.id && o.stmtFee === i.s);
+  openForm({ title: `Sao kê ngày ${fmtShort(parseISO(i.s))} · ${wName(w)}`, saveLabel: 'Lưu', values: { amt: st.amt || 0, min: st.min || 0, fee: feeO ? feeO.amount : 0 },
+    fields: [{ key: 'amt', label: 'Số tiền phải thanh toán trên sao kê (₫)', type: 'money', required: true, half: true }, { key: 'min', label: 'Thanh toán tối thiểu (₫)', type: 'money', half: true },
+      { key: 'fee', label: 'Phí & lãi ghi trên sao kê kỳ này (₫, nếu có)', type: 'money' }],
+    onSave: v => { w.stmts = w.stmts || {}; w.stmts[i.s] = { amt: v.amt, min: v.min };
+      const f = state.out.find(o => o.w === w.id && o.stmtFee === i.s);
+      if (v.fee > 0) { if (!state.cfg.expCats.includes(FEE_CAT)) state.cfg.expCats.push(FEE_CAT);
+        if (f) f.amount = v.fee; else state.out.push({ id: uid(), date: i.s, item: 'Phí & lãi thẻ ' + wName(w) + ' (sao kê ' + fmtShort(parseISO(i.s)) + ')', cat: FEE_CAT, amount: v.fee, note: '', loan: '', w: w.id, stmtFee: i.s }); }
+      else if (f) state.out = state.out.filter(o => o !== f);
+      toast(`Đã lưu: kỳ này cần trả ${money(v.amt)}${v.fee > 0 ? ` · phí & lãi ${money(v.fee)} ghi thành chi` : ''}`); } });
+  const n = $('#mform'); if (n) n.insertAdjacentHTML('afterbegin', `<p class="small mb-2">${app === null ? 'Kỳ này trước ngày bắt đầu theo dõi nên app chưa có số để so.' : `Theo app, dư nợ ngày ${fmtShort(parseISO(i.s))} là <b>${money(app)}</b>.`} Số cần trả sẽ lấy theo sao kê. Phí & lãi (nếu có) được ghi thành khoản chi “${FEE_CAT}” trên thẻ, tính vào chi tháng đó và trừ trước khi chia hũ như trả nợ.</p>`);
 }
 // Trường chọn ví trong form thu / chi / khoản cố định / khoản vay
 function wFld(kind, o, isNew) {
@@ -5033,10 +5045,13 @@ MONEY2_A['k-z'] = el => { const f = document.getElementById(el.dataset.f); if (!
 
 /* ===================== NGÂN SÁCH · 6 HŨ · GHI NHIỀU KHOẢN · BÁO CÁO THÁNG · KIỂM TRA DỮ LIỆU (18/11) ===================== */
 
+// Phí & lãi thẻ / ngân hàng: là chi phí của khoản nợ nên tính cùng nhóm trả nợ (không vào ngân sách sinh hoạt, trừ trước khi chia hũ)
+const FEE_CAT = 'Phí & lãi ngân hàng';
+const isDebtCost = c => c === DEBT_CAT || c === FEE_CAT || /^phi (&|va) lai/.test(fold(c));
 /* --- Ngân sách tháng: tổng + còn / vượt từng mục --- */
 function budgetCard(m) {
   const cats = state.cfg.expCats.filter(c => state.budget[c] > 0); if (!cats.length) return '';
-  const O = monthOut(m).filter(x => x.cat !== DEBT_CAT), spentOf = c => sum(O.filter(x => x.cat === c));
+  const O = monthOut(m).filter(x => !isDebtCost(x.cat)), spentOf = c => sum(O.filter(x => x.cat === c));
   const tb = sum(cats, c => state.budget[c]), ts = sum(O), inB = sum(cats, spentOf), outB = ts - inB, left = tb - ts, tp = tb ? ts / tb * 100 : 0;
   const col = p => p > 100 ? 'var(--red)' : p > 80 ? '#D9A214' : 'var(--green)';
   const rows = cats.map(c => { const sp = spentOf(c), b = state.budget[c], p = sp / b * 100, r = b - sp;
@@ -5044,7 +5059,7 @@ function budgetCard(m) {
   const noB = [...new Set(O.map(x => x.cat))].filter(c => !(state.budget[c] > 0));
   return `<div class="card pad mt-3"><div class="flex items-center justify-between gap-2 flex-wrap mb-2"><h2 class="h2">Ngân sách ${m === curMonth() ? 'tháng này' : monthLabel(m).toLowerCase()}</h2><button class="btn btn-ghost btn-sm" data-act="goto" data-tab="settings">Sửa ngân sách</button></div>
     <div class="budtot mb-3"><div class="flex justify-between gap-2 flex-wrap small"><span><b>Tổng ngân sách ${money(tb)}</b></span><span>Đã chi <b>${money(ts)}</b> · ${left >= 0 ? `<b class="t-green">còn ${money(left)}</b>` : `<b class="t-red">vượt ${money(-left)}</b>`}</span></div><div class="bar mt-1" style="height:10px"><i style="width:${Math.min(100, tp)}%;background:${col(tp)}"></i></div>
-      <div class="tiny muted mt-1">Không tính trả nợ.${outB ? ` Trong đó ${money(outB)} thuộc mục chưa đặt ngân sách (${esc(noB.join(', '))}).` : ''}</div></div>
+      <div class="tiny muted mt-1">Không tính trả nợ và phí & lãi ngân hàng.${outB ? ` Trong đó ${money(outB)} thuộc mục chưa đặt ngân sách (${esc(noB.join(', '))}).` : ''}</div></div>
     ${rows.join('')}</div>`;
 }
 
@@ -5061,11 +5076,11 @@ function jarGuess(c) { const f = fold(c);
   return 'nec'; }
 function jarCfg() { const c = state.jars || {};
   return { pct: Object.assign({}, ...JARS.map(j => ({ [j[0]]: j[2] })), c.pct || {}), map: c.map || {}, debtFirst: c.debtFirst !== false, base: c.base || 'actual', fixed: c.fixed || 0, saveW: c.saveW || {} }; }
-const jarOf = c => c === DEBT_CAT ? (jarCfg().debtFirst ? 'debt' : 'nec') : (jarCfg().map[c] || jarGuess(c));
+const jarOf = c => isDebtCost(c) ? (jarCfg().debtFirst ? 'debt' : 'nec') : (jarCfg().map[c] || jarGuess(c));
 function jarMonth(m) {
   const C = jarCfg(), I = monthIn(m), O = monthOut(m);
   const income = C.base === 'fixed' ? C.fixed : C.base === 'salary' ? sum(I.filter(x => /luong/.test(fold(x.src)))) : sum(I);
-  const debt = C.debtFirst ? sum(O.filter(x => x.cat === DEBT_CAT)) : 0, pool = Math.max(0, income - debt);
+  const debt = C.debtFirst ? sum(O.filter(x => isDebtCost(x.cat))) : 0, pool = Math.max(0, income - debt);
   const R = JARS.map(([k, n, , ic, d]) => { const p = Number(C.pct[k]) || 0, alloc = Math.round(pool * p / 100), L = O.filter(x => jarOf(x.cat) === k);
     let used = sum(L);
     if (SAVE_JARS.includes(k)) { const W = (C.saveW[k] ? [C.saveW[k]] : []); used += sum((state.xfers || []).filter(x => monthOf(x.date) === m && W.includes(x.to) && !W.includes(x.from))) - sum((state.xfers || []).filter(x => monthOf(x.date) === m && W.includes(x.from) && !W.includes(x.to))); }
@@ -5089,12 +5104,12 @@ function jarView() {
   const base = C.base === 'fixed' ? 'thu nhập cố định đã đặt' : C.base === 'salary' ? 'lương' : 'tổng thu';
   return `<div class="flex items-center justify-between mb-3"><button class="btn btn-line btn-sm" data-act="fm" data-n="-1" aria-label="Tháng trước">‹</button><b>${monthLabel(m)}</b><button class="btn btn-line btn-sm" data-act="fm" data-n="1" aria-label="Tháng sau">›</button></div>
     <div class="card pad"><div class="flex items-center justify-between gap-2 flex-wrap"><h2 class="h2">🫙 6 hũ chi tiêu</h2><button class="btn btn-line btn-sm" data-act="jar-cfg">⚙️ Chỉnh tỷ lệ & xếp mục</button></div>
-      <div class="stats s4 mt-3">${stat('Thu nhập (' + base + ')', money(J.income), 't-green')}${C.debtFirst ? stat('Trả nợ (trừ trước)', money(J.debt), 't-purple') : ''}${stat('Đem chia vào hũ', money(J.pool))}${stat('Còn trong các hũ chi', money(sum(J.R.filter(r => !r.save), r => r.left)), sum(J.R.filter(r => !r.save), r => r.left) < 0 ? 't-red' : 't-green')}</div>
+      <div class="stats s4 mt-3">${stat('Thu nhập (' + base + ')', money(J.income), 't-green')}${C.debtFirst ? stat('Trả nợ, phí & lãi (trừ trước)', money(J.debt), 't-purple') : ''}${stat('Đem chia vào hũ', money(J.pool))}${stat('Còn trong các hũ chi', money(sum(J.R.filter(r => !r.save), r => r.left)), sum(J.R.filter(r => !r.save), r => r.left) < 0 ? 't-red' : 't-green')}</div>
       <p class="tiny muted mt-2">${C.debtFirst ? 'Trả nợ được trừ trước rồi mới chia hũ (đang có nợ nên chia trên toàn bộ thu nhập sẽ không đủ chi). ' : ''}Mỗi mục chi thuộc một hũ; hai hũ để dành tính theo tiền chuyển vào ví để dành.${J.sumPct !== 100 ? ` <b class="t-red">Tổng tỷ lệ đang là ${J.sumPct}%, nên bằng 100%.</b>` : ''}${!J.income ? ' <b class="t-amber">Tháng này chưa có khoản thu nào.</b>' : ''}</p></div>
     <div class="grid gap-3 mt-3 md:grid-cols-2">${J.R.map(card).join('')}</div>`;
 }
 function jarForm() {
-  const C = jarCfg(), cats = state.cfg.expCats.filter(c => c !== DEBT_CAT), jo = JARS.map(j => ({ v: j[0], l: j[3] + ' ' + j[1] }));
+  const C = jarCfg(), cats = state.cfg.expCats.filter(c => !isDebtCost(c)), jo = JARS.map(j => ({ v: j[0], l: j[3] + ' ' + j[1] }));
   const sw = wOpts(w => !isCredit(w) && !isLend(w), '— Chưa chọn —');
   const vals = { base: C.base, fixed: C.fixed, debtFirst: C.debtFirst, ltssW: C.saveW.ltss || '', ffaW: C.saveW.ffa || '' };
   JARS.forEach(j => { vals['p_' + j[0]] = Number(C.pct[j[0]]) || 0; }); cats.forEach((c, i) => { vals['c_' + i] = jarOf(c); });
@@ -5210,7 +5225,7 @@ function dcIssues() {
   // ngân sách cho mục không có trong danh sách mục chi
   Object.keys(state.budget || {}).filter(c => state.budget[c] > 0 && !state.cfg.expCats.includes(c)).forEach(c => I.push({ key: 'bud' + c, ic: '🧾', t: `Ngân sách “${c}” ${money(state.budget[c])} không có mục chi tương ứng`, d: 'Không khoản chi nào ghi được vào mục này nên ngân sách bị treo.', b: [['Gộp vào mục khác / thêm mục', 'dc-bud', c]] }));
   // mục có chi nhưng chưa đặt ngân sách
-  const nb = [...new Set(monthOut(cm).filter(x => x.cat !== DEBT_CAT).map(x => x.cat))].filter(c => !(state.budget[c] > 0));
+  const nb = [...new Set(monthOut(cm).filter(x => !isDebtCost(x.cat)).map(x => x.cat))].filter(c => !(state.budget[c] > 0));
   nb.forEach(c => I.push({ key: 'nob' + c + cm, ic: '🎯', t: `Mục “${c}” đã chi ${money(sum(monthOut(cm).filter(x => x.cat === c)))} tháng này nhưng chưa có ngân sách`, b: [['Đặt ngân sách', 'dc-setbud', c]] }));
   // ghi chú khoản vay đã cũ
   state.loans.filter(l => /bo sung lai suat/.test(fold(l.note)) && l.rate && l.monthly).forEach(l => I.push({ key: 'lnote' + l.id, ic: '📝', t: `Ghi chú khoản vay “${l.name}” còn nhắc bổ sung lãi suất, số trả dù đã nhập đủ`, b: [['Xóa ghi chú cũ', 'dc-lnote', l.id]] }));
@@ -5266,7 +5281,7 @@ function repData(m) {
   stampDone();
   const s = monthSummary(m), pm = shiftMonth(m, -1), ps = monthSummary(pm), O = monthOut(m), I = monthIn(m), d0 = m + '-01', prev = iso(addDays(parseISO(d0), -1)), end = dOfM(m, 31), td = iso(today()), upto = end < td ? end : td;
   const cats = {}; O.forEach(x => { cats[x.cat] = (cats[x.cat] || 0) + x.amount; }); const pc = {}; monthOut(pm).forEach(x => { pc[x.cat] = (pc[x.cat] || 0) + x.amount; });
-  const catRows = Object.entries(cats).sort((a, b) => b[1] - a[1]).map(([c, v]) => ({ c, v, b: state.budget[c] || 0, p: pc[c] || 0, jar: c === DEBT_CAT ? '' : (JARS.find(j => j[0] === jarOf(c)) || [])[1] || '' }));
+  const catRows = Object.entries(cats).sort((a, b) => b[1] - a[1]).map(([c, v]) => ({ c, v, b: state.budget[c] || 0, p: pc[c] || 0, jar: isDebtCost(c) ? 'Trả nợ (trừ trước)' : (JARS.find(j => j[0] === jarOf(c)) || [])[1] || '' }));
   const W = (state.wallets || []).filter(w => (w.openDate || '') <= end).map(w => ({ w, a: (w.openDate || '') <= prev ? wBal(w, prev) : (w.open || 0), z: wBal(w, upto) }));
   const loans = state.loans.map(l => ({ l, paid: autoPaid(m, l.id) + ((state.repay[m] || {})[l.id] || 0), skip: loanSkip(l, m), bal: balanceOf(l) }));
   const T = state.tasks, root = t => { let x = t, g = 0; while (x.parent && tById(x.parent) && g++ < 60) x = tById(x.parent); return x; };
