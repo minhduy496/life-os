@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <html lang="vi">
 <head>
-<meta name="lifeos-app" content="1"><meta name="lifeos-build" content="18/11/2026 15:29">
+<meta name="lifeos-app" content="1"><meta name="lifeos-build" content="18/11/2026 15:39">
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Life OS</title>
@@ -2115,7 +2115,7 @@ const monthOut = m => state.out.filter(x => monthOf(x.date) === m);
 const monthIn = m => state.inn.filter(x => monthOf(x.date) === m);
 function monthSummary(m) {
   const o = monthOut(m), i = monthIn(m), tin = sum(i), tout = sum(o), debt = sum(o.filter(x => x.cat === DEBT_CAT));
-  const carry = carryBefore(m); return { tin, tout, rest: tin - tout, debt, other: tout - debt, carry, lend: lendNet(m), end: carry === null ? null : carry + tin - tout - lendNet(m) };
+  const carry = carryBefore(m); return { tin, tout, rest: tin - tout, debt, other: tout - debt, carry, lend: lendNet(m), swipe: cardSwipe(m), pay: cardPay(m), adj: adjNet(m), end: carry === null ? null : carry + monthNet(m) };
 }
 // Đã trả = số trả trước khi dùng hệ thống + ô nhập tay theo tháng + các khoản "Trả nợ" ghi ở Thu chi có chọn khoản vay (tự động, không nhập hai lần)
 const linkedPaid = id => sum(state.out.filter(x => x.loan === id && x.cat === DEBT_CAT));
@@ -4715,7 +4715,7 @@ function walletView() {
       <div style="text-align:right;flex:none"><div class="tiny muted">Dư nợ</div><b class="nowrap">${money(b)}</b></div></div>`; };
   const loose = state.out.filter(x => !x.w && monthOf(x.date) === curMonth()).length + state.inn.filter(x => !x.w && monthOf(x.date) === curMonth()).length;
   return `<div class="stats s4">${stat('Tiền đang có', money(cash), 't-green')}${stat('Rút được', money(free))}${stat('Nợ thẻ tín dụng', money(card), card ? 't-purple' : '')}${stat('Nợ vay (tab Vay)', money(loanDebt))}${LD.length ? stat('Cho mượn (người khác nợ)', money(wLend())) : ''}${stat('Tài sản ròng', money(cash + wLend() - card - loanDebt), cash + wLend() - card - loanDebt < 0 ? 't-red' : 't-green')}</div>
-    <p class="tiny muted mt-2">Tiền đang có = tiền trong các ví. “Còn lại” ở Thu chi = tiền đang có − nợ thẻ = <b>${money(cash - card)}</b>${LD.length ? `; tiền cho mượn ${money(wLend())} theo dõi riêng` : ''}.</p>
+    <p class="tiny muted mt-2">Tiền đang có = tiền trong các ví = “Còn lại cuối tháng” ở Thu chi.${card ? ` Trả hết nợ thẻ thì còn <b>${money(cash - card)}</b>.` : ''}${LD.length ? ` Tiền cho mượn ${money(wLend())} theo dõi riêng.` : ''}</p>
     <div class="card mt-3"><div class="pad flex items-center justify-between gap-2 flex-wrap"><h2 class="h2">📅 Lịch trả ${monthLabel(cm).toLowerCase()}</h2><span class="small muted">${P.filter(p => !p.done).length} khoản chưa trả</span></div>
       ${P.length ? P.map(p => pRow(p)).join('') : emptyBox('Tháng này không có khoản phải trả. Thẻ tín dụng và khoản vay cần có ngày thanh toán.')}
       ${P.length ? `<div class="pad small" style="border-top:1px solid var(--line)">Còn phải trả tháng này <b>${money(due)}</b> · tiền rút được <b>${money(free)}</b> · còn lại sau khi trả <b class="${after < 0 ? 't-red' : 't-green'}">${money(after)}</b>${C.length ? '<div class="tiny muted mt-1">Thẻ tín dụng tính theo số phải trả trên sao kê (tự nhập mỗi kỳ), không phải toàn bộ dư nợ. Dấu ≈ là chưa nhập sao kê nên đang tạm tính.</div>' : ''}</div>` : ''}
@@ -4949,19 +4949,29 @@ Object.assign(WALLET_A, {
    Còn lại cuối tháng = còn lại tháng trước + thu − chi. Tính từ một tháng mốc với số tiền đầu kỳ (state.carry = { start, open }).
    Chưa đặt mốc: tính từ tháng đầu tiên có thu chi, đầu kỳ = 0. Có Ví & thẻ: lấy đầu kỳ = tiền trong ví − nợ thẻ. */
 const firstMoneyMonth = () => { const d = [...state.out, ...state.inn].map(x => x.date).filter(Boolean).sort()[0]; return d ? monthOf(d) : curMonth(); };
-const carryStart = () => (state.carry && state.carry.start) || firstMoneyMonth();
-const carryOpen = () => state.carry && state.carry.auto ? carryAt(carryStart()) : (state.carry && Number(state.carry.open)) || 0;
+const carryStart = () => { const c = state.carry; if (c && c.auto) { const f = firstMoneyMonth(); return f < (c.start || f) ? f : c.start; } return (c && c.start) || firstMoneyMonth(); };
+// Đầu kỳ tự động: neo vào số dư các ví ở tháng bắt đầu theo dõi ví; bắt đầu sớm hơn (ví dụ tháng 10) thì tính ngược từ mốc đó
+function carryAuto(st) { const an = wStartMonth(); if (st >= an) return carryAt(st); let v = carryAt(an); for (let x = st, g = 0; x < an && g < 600; x = shiftMonth(x, 1), g++) v -= monthNet(x); return v; }
+const carryOpen = () => state.carry && state.carry.auto ? carryAuto(carryStart()) : (state.carry && Number(state.carry.open)) || 0;
 // Cho mượn ròng trong tháng: tiền chuyển vào ô cho mượn − tiền người mượn trả về (không phải thu chi nhưng làm thay đổi tiền đang có)
 function lendNet(m) { const L = new Set((state.wallets || []).filter(w => w.kind === 'lend').map(w => w.id)); if (!L.size) return 0;
   return sum((state.xfers || []).filter(x => monthOf(x.date) === m && L.has(x.to) && !L.has(x.from))) - sum((state.xfers || []).filter(x => monthOf(x.date) === m && L.has(x.from) && !L.has(x.to))); }
-const monthNet = m => sum(monthIn(m)) - sum(monthOut(m)) - lendNet(m);
+// “Còn lại” = tiền đang có trong các ví. Quẹt thẻ là chi lúc quẹt nhưng tiền chưa ra khỏi ví: cộng lại phần quẹt, trừ khi trả thẻ.
+const cardIds = () => new Set((state.wallets || []).filter(w => w.kind === 'credit').map(w => w.id));
+const inWin = (x, id) => { const w = (state.wallets || []).find(v => v.id === id); return !!w && (x.date || '') >= (w.openDate || ''); };
+function cardSwipe(m) { const C = cardIds(); if (!C.size) return 0; const f = x => C.has(x.w) && monthOf(x.date) === m && inWin(x, x.w); return sum(state.out.filter(f)) - sum(state.inn.filter(f)); }
+function cardPay(m) { const C = cardIds(); if (!C.size) return 0; const X = (state.xfers || []).filter(x => monthOf(x.date) === m);
+  return sum(X.filter(x => C.has(x.to) && !C.has(x.from) && inWin(x, x.to))) - sum(X.filter(x => C.has(x.from) && !C.has(x.to) && inWin(x, x.from))); }
+// Chỉnh số dư khi đối chiếu ví tiền (lãi, phí nhỏ, khoản quên ghi): đã nằm trong số dư ví nên cũng tính vào còn lại
+function adjNet(m) { const W = state.wallets || []; return sum((state.wadj || []).filter(a => monthOf(a.date) === m && W.some(w => w.id === a.w && w.kind !== 'credit' && w.kind !== 'lend')), a => a.delta); }
+const monthNet = m => sum(monthIn(m)) - sum(monthOut(m)) - lendNet(m) + cardSwipe(m) - cardPay(m) + adjNet(m);
 function carryBefore(m) {           // “còn lại tháng trước” của tháng m; null = trước tháng mốc
   const st = carryStart(); if (m < st) return null;
   let v = carryOpen(); for (let x = st, g = 0; x < m && g < 600; x = shiftMonth(x, 1), g++) v += monthNet(x); return v;
 }
 // Đầu kỳ theo Ví & thẻ: tiền + cho mượn − nợ thẻ tại ngày bắt đầu theo dõi, cộng lại các khoản thu chi cùng tháng ghi trước ngày đó
 // Đầu kỳ theo Ví & thẻ: số dư các ví đầu tháng bắt đầu (tháng ví mới nhất bắt đầu theo dõi), tự cập nhật khi sửa ví
-function carryFromWallets() { if (!wList().filter(w => !isLend(w)).length) return null; const m = wStartMonth(); return { start: m, auto: true, open: carryAt(m) }; }
+function carryFromWallets() { if (!wList().filter(w => !isLend(w)).length) return null; const m = firstMoneyMonth() < wStartMonth() ? firstMoneyMonth() : wStartMonth(); return { start: m, auto: true, open: carryAuto(m) }; }
 function carryForm() {
   const c = state.carry || { start: carryStart(), open: 0 }, fw = carryFromWallets();
   openForm({ title: 'Số tiền đầu kỳ', saveLabel: 'Lưu', values: { start: c.start, open: Math.abs(c.open || 0), neg: (c.open || 0) < 0 },
@@ -5166,20 +5176,19 @@ function lendNoti(add) { const m = curMonth(), td = iso(today());
 /* --- Còn lại cuối tháng so với ví & thẻ --- */
 // Đầu kỳ tháng m theo ví: số dư các ví lúc bắt đầu tháng (ví mở trong tháng lấy số dư ban đầu), nợ thẻ trừ đi, cho mượn cộng vào
 function carryAt(m) { const d0 = m + '-01', prev = iso(addDays(parseISO(d0), -1)), end = dOfM(m, 31);
-  return sum((state.wallets || []).filter(w => !isLend(w) && (w.openDate || '') <= end), w => (isCredit(w) ? -1 : 1) * ((w.openDate || '') <= prev ? wBal(w, prev) : (w.open || 0))); }
+  return sum((state.wallets || []).filter(w => !isLend(w) && !isCredit(w) && (w.openDate || '') <= end), w => (w.openDate || '') <= prev ? wBal(w, prev) : (w.open || 0)); }
 const wStartMonth = () => { const D = wList().filter(w => !isLend(w)).map(w => w.openDate || '').filter(d => d && d <= iso(today())).sort(); return D.length ? monthOf(D[D.length - 1]) : curMonth(); };
 function recoParts(m) { // các nguyên nhân làm “Còn lại” khác “ví & thẻ”
-  const st = carryStart() + '-01', td = iso(today()), W = state.wallets || [], wb = id => W.find(w => w.id === id), P = [];
-  const adj = sum((state.wadj || []).filter(a => a.date >= st && a.date <= td), a => (isCredit(wb(a.w)) ? 1 : -1) * a.delta); if (adj) P.push(['Chỉnh số dư khi đối chiếu ví (chưa ghi thành thu / chi)', adj]);
+  const an = state.carry && state.carry.auto && carryStart() < wStartMonth() ? wStartMonth() : carryStart(), st = an + '-01', td = iso(today()), W = state.wallets || [], wb = id => W.find(w => w.id === id), P = [];
   const loose = x => x.date >= st && x.date <= td && !wb(x.w), lo = -sum(state.out.filter(loose)) + sum(state.inn.filter(loose)); if (lo) P.push(['Khoản thu / chi chưa gắn ví', lo]);
   const pre = x => x.date >= st && x.date <= td && wb(x.w) && wb(x.w).openDate && x.date < wb(x.w).openDate, pr = -sum(state.out.filter(pre)) + sum(state.inn.filter(pre)); if (pr) P.push(['Khoản ghi trước ngày bắt đầu theo dõi ví', pr]);
-  const st2 = dOfM(carryStart(), 31), late = W.filter(w => (w.openDate || '') > st2 && (w.openDate || '') <= td), lt = -sum(late, w => (isCredit(w) ? -1 : 1) * (w.open || 0)); if (lt) P.push(['Ví thêm sau tháng bắt đầu tính (' + late.map(w => w.name).join(', ') + ')', lt]);
+  const st2 = dOfM(an, 31), late = W.filter(w => !isCredit(w) && !isLend(w) && (w.openDate || '') > st2 && (w.openDate || '') <= td), lt = -sum(late, w => w.open || 0); if (lt) P.push(['Ví thêm sau tháng bắt đầu tính (' + late.map(w => w.name).join(', ') + ')', lt]);
   return P; }
 function recoHTML(m, s) {
   if (!(state.wallets || []).length || m !== curMonth() || s.end === null) return '';
-  const cash = wCash(), lend = wLend(), card = wCardDebt(), wn = cash - card, d = s.end - wn, P = Math.abs(d) >= 1 && state.carry && state.carry.auto ? recoParts(m) : [], other = d - sum(P, p => p[1]);
-  return `<div class="card pad small mt-2" style="background:var(--bg2,transparent)"><div><b>Kiểm tra với Ví & thẻ:</b> tiền trong các ví ${money(cash)} − nợ thẻ ${money(card)} = <b>${money(wn)}</b>${Math.abs(d) < 1 ? ' · <span class="t-green">khớp với Còn lại cuối tháng ✓</span>' : ` · Còn lại cuối tháng đang <b class="t-amber">${d > 0 ? 'cao' : 'thấp'} hơn ${money(Math.abs(d))}</b>`}</div>
-    <div class="tiny muted mt-1">“Còn lại” = tiền trong các ví − nợ thẻ (quẹt thẻ đã tính là chi lúc quẹt).</div>
+  const cash = wCash(), lend = wLend(), card = wCardDebt(), wn = cash, d = s.end - wn, P = Math.abs(d) >= 1 && state.carry && state.carry.auto ? recoParts(m) : [], other = d - sum(P, p => p[1]);
+  return `<div class="card pad small mt-2" style="background:var(--bg2,transparent)"><div><b>Kiểm tra với Ví & thẻ:</b> Tiền đang có <b>${money(wn)}</b>${Math.abs(d) < 1 ? ' · <span class="t-green">khớp với Còn lại cuối tháng ✓</span>' : ` · Còn lại cuối tháng đang <b class="t-amber">${d > 0 ? 'cao' : 'thấp'} hơn ${money(Math.abs(d))}</b>`}</div>
+    ${card ? `<div class="tiny muted mt-1">Nợ thẻ tín dụng còn phải trả ${money(card)} → nếu trả hết thẻ thì còn <b>${money(cash - card)}</b>.</div>` : ''}
     ${Math.abs(d) >= 1 ? `${P.length ? `<ul class="tiny mt-1" style="margin:0;padding-left:18px">${P.map(([t, v]) => `<li>${esc(t)}: ${v > 0 ? '+' : '−'}${fmt(Math.abs(v))}</li>`).join('')}${Math.abs(other) >= 1 ? `<li>Chưa rõ (thường là khoản quên ghi): ${other > 0 ? '+' : '−'}${fmt(Math.abs(other))}</li>` : ''}</ul>` : ''}
       <div class="flex gap-2 flex-wrap mt-2">${state.carry && state.carry.auto ? '' : '<button class="btn btn-line btn-sm" data-act="dc-carry">Đặt đầu kỳ theo Ví & thẻ</button>'}${state.carry && state.carry.auto ? `<button class="btn btn-ghost btn-sm" data-act="reco-fix">Ghi phần lệch ${money(Math.abs(d))} thành ${d > 0 ? 'chi' : 'thu'} chưa ghi rõ</button>` : ''}</div>` : ''}</div>`;
 }
@@ -5196,7 +5205,7 @@ function dcIssues() {
   // trả thẻ tín dụng ghi thành chi trả nợ
   if (W.some(isCredit)) state.out.filter(o => o.cat === DEBT_CAT && !o.loan && /\bthe\b|tin dung/.test(fold(o.item))).forEach(o => I.push({ key: 'cpay' + o.id, ic: '💳', t: `“${o.item}” ${money(o.amount)} (${fmtShort(parseISO(o.date))}) là trả thẻ tín dụng nhưng đang tính là chi`, d: 'Quẹt thẻ đã tính là chi lúc quẹt, trả thẻ chỉ là chuyển tiền: đổi để không tính chi hai lần. Nếu thẻ chưa có dư nợ lúc bắt đầu theo dõi, app tự cộng phần này vào dư nợ ban đầu của thẻ.', b: [['Đổi thành trả thẻ', 'dc-cpay', o.id]] }));
   // khoản thu chi chưa gắn ví (sau ngày bắt đầu theo dõi ví)
-  const lo = has ? [...state.out.map(x => ['out', x]), ...state.inn.map(x => ['in', x])].filter(([k, x]) => !wb(x.w) && x.date >= (state.carry && state.carry.auto ? carryStart() : wStartMonth()) + '-01' && !opening.includes(x)) : [];
+  const lo = has ? [...state.out.map(x => ['out', x]), ...state.inn.map(x => ['in', x])].filter(([k, x]) => !wb(x.w) && x.date >= wStartMonth() + '-01' && !opening.includes(x)) : [];
   if (lo.length) I.push({ key: 'loose' + lo.length, ic: '🔗', t: `${lo.length} khoản thu chi chưa gắn ví`, d: 'Gắn ví thì số dư ví đó thay đổi theo: chỉ gắn khi số dư ví đang thiếu khoản này.', rows: lo.slice(0, 6).map(([k, x]) => [k === 'out' ? 'edit-out' : 'edit-in', x.id, `${fmtShort(parseISO(x.date))} · ${x.item || x.src} · ${k === 'out' ? '−' : '+'}${fmt(x.amount)}`]) });
   // ngân sách cho mục không có trong danh sách mục chi
   Object.keys(state.budget || {}).filter(c => state.budget[c] > 0 && !state.cfg.expCats.includes(c)).forEach(c => I.push({ key: 'bud' + c, ic: '🧾', t: `Ngân sách “${c}” ${money(state.budget[c])} không có mục chi tương ứng`, d: 'Không khoản chi nào ghi được vào mục này nên ngân sách bị treo.', b: [['Gộp vào mục khác / thêm mục', 'dc-bud', c]] }));
@@ -5210,8 +5219,8 @@ function dcIssues() {
   // sao kê thẻ đã chốt nhưng chưa nhập
   W.filter(w => isCredit(w) && !w.arch && w.stmtDay && w.dueDay).forEach(w => { const s = wLastStmt(iso(today()), w.stmtDay); if (s && s >= (w.openDate || '') && !(w.stmts || {})[s] && wBal(w) > 0) I.push({ key: 'stmt' + w.id + s, ic: '💳', t: `${wName(w)}: sao kê ngày ${fmtShort(parseISO(s))} chưa nhập số phải trả`, b: [['Nhập số sao kê', 'w-stmt', w.id, s]] }); });
   // đầu kỳ chưa lấy theo ví (để cuối cùng: các sửa ở trên làm số đầu kỳ thay đổi)
-  if (has && !(state.carry && state.carry.auto)) { const ms = monthSummary(cm), wn = wCash() - wCardDebt();
-    I.push({ key: 'carry', ic: '🧮', t: 'Còn lại cuối tháng chưa tính từ số dư các ví', d: `Đang cộng dồn từ ${monthLabel(carryStart())} với đầu kỳ ${money(carryOpen())}${ms.end !== null ? `, lệch ${money(Math.abs(ms.end - wn))} so với tiền − nợ thẻ` : ''}. Đặt đầu kỳ ${monthLabel(wStartMonth())} = số dư các ví đầu tháng (tự cập nhật khi sửa ví).`, b: [['Đặt đầu kỳ theo Ví & thẻ', 'dc-carry']] }); }
+  if (has && !(state.carry && state.carry.auto)) { const ms = monthSummary(cm), wn = wCash();
+    I.push({ key: 'carry', ic: '🧮', t: 'Còn lại cuối tháng chưa tính từ số dư các ví', d: `Đang cộng dồn từ ${monthLabel(carryStart())} với đầu kỳ ${money(carryOpen())}${ms.end !== null ? `, lệch ${money(Math.abs(ms.end - wn))} so với tiền − nợ thẻ` : ''}. Đặt theo số dư các ví (tự cập nhật khi sửa ví), tính từ ${monthLabel(firstMoneyMonth() < wStartMonth() ? firstMoneyMonth() : wStartMonth())}.`, b: [['Đặt đầu kỳ theo Ví & thẻ', 'dc-carry']] }); }
   return I.filter(x => !dcIgn().includes(x.key));
 }
 function dcCard() {
@@ -5332,11 +5341,11 @@ const MONEY3_A = {
   'mx-k': () => { mxRead(); MX.rows.forEach(r => { if (r.amount > 0 && r.amount < 1000) r.amount *= 1000; }); mxRender(); },
   'mx-save': () => mxSave(),
   'lend-recv': el => { const w = wById(el.dataset.id); if (!w) return; xfForm(null, { from: w.id, to: state.cfg.lastWin && wById(state.cfg.lastWin) ? state.cfg.lastWin : '', amount: Math.min(w.rMonthly || 0, wBal(w)) || 0, note: 'Nhận trả: ' + w.name }); },
-  'reco-fix': () => { const s = monthSummary(curMonth()), d = s.end - (wCash() - wCardDebt()); if (Math.abs(d) < 1) return;
+  'reco-fix': () => { const s = monthSummary(curMonth()), d = s.end - wCash(); if (Math.abs(d) < 1) return;
     const c = 'Chi chưa ghi rõ'; if (d > 0 && !state.cfg.expCats.includes(c)) state.cfg.expCats.push(c);
     if (d > 0) state.out.push({ id: uid(), date: iso(today()), item: 'Chi chưa ghi (đối chiếu Ví & thẻ)', cat: c, amount: Math.round(d), w: '', note: '' }); else state.inn.push({ id: uid(), date: iso(today()), src: 'Thu khác', amount: Math.round(-d), w: '', note: 'Thu chưa ghi (đối chiếu Ví & thẻ)' });
     commit(); toast('Đã ghi phần lệch, Còn lại đã khớp với Ví & thẻ'); },
-  'dc-carry': () => { state.carry = { start: wStartMonth(), auto: true }; commit(); toast(`Đầu kỳ ${monthLabel(state.carry.start)} lấy theo số dư các ví: ${money(carryAt(state.carry.start))}`); },
+  'dc-carry': () => { const f = carryFromWallets(); state.carry = { start: f.start, auto: true }; commit(); toast(`Đầu kỳ ${monthLabel(f.start)}: ${money(f.open)} (theo số dư các ví)`); },
   'dc-del-in': el => twoClick(el, 'Bấm lần nữa để xóa', () => { state.inn = state.inn.filter(x => x.id !== el.dataset.id); commit(); toast('Đã xóa khoản thu mở sổ'); }),
   'dc-lend': el => { const o = byId(state.out, el.dataset.id); if (o) dcLend(o); },
   'dc-cpay': el => { const o = byId(state.out, el.dataset.id); if (o) dcCardPay(o); },
@@ -5503,8 +5512,8 @@ function moneyView0() {
       <div class="flex justify-end mb-2"><button class="btn btn-line btn-sm" data-act="rep-open">📄 Báo cáo tháng</button></div>
       ${sampleRows() ? `<div class="card pad small mb-3 flex items-center justify-between gap-2 flex-wrap" style="background:var(--amber-bg)"><span>Thu chi còn <b>${sampleRows()}</b> khoản <b>dữ liệu mẫu</b> (ghi “(mẫu)”) làm sai số các tháng.</span><button class="btn btn-line btn-sm" id="sample-del" data-act="sample-del">Xóa khoản mẫu</button></div>` : ''}
       <div class="stats s4">${stat('Còn lại tháng trước', s.carry === null ? '—' : money(s.carry), s.carry < 0 ? 't-red' : '')}${stat('Thu', money(s.tin), 't-green')}${stat('Chi', money(s.tout))}${stat('Còn lại cuối tháng', s.end === null ? '—' : money(s.end), s.end !== null && s.end < 0 ? 't-red' : 't-green')}${stat('Thu − chi trong tháng', money(s.rest), s.rest < 0 ? 't-red' : '')}${stat('Trong đó trả nợ', money(s.debt), 't-purple')}${s.lend ? stat(s.lend > 0 ? 'Cho mượn ra' : 'Nhận lại tiền cho mượn', money(Math.abs(s.lend))) : ''}</div>
-      <p class="small mt-2 carryf">${s.end !== null ? `Còn lại cuối tháng = <span class="nowrap">${fmt(s.carry)} <span class="muted">(tháng trước)</span></span> + <span class="nowrap t-green">${fmt(s.tin)} <span class="muted">(thu)</span></span> − <span class="nowrap">${fmt(s.tout)} <span class="muted">(chi)</span></span>${s.lend ? ` ${s.lend > 0 ? '−' : '+'} <span class="nowrap">${fmt(Math.abs(s.lend))} <span class="muted">(${s.lend > 0 ? 'cho mượn' : 'nhận trả'})</span></span>` : ''} = <b class="nowrap">${money(s.end)}</b>` : `Tháng này trước mốc ${monthLabel(carryStart())} nên chỉ tính thu − chi trong tháng.`}</p>
-      <p class="tiny muted mt-1">Cộng dồn từ ${monthLabel(carryStart())}${state.carry && state.carry.auto ? ' (đầu kỳ lấy theo số dư Ví & thẻ)' : ` (đầu kỳ ${money(carryOpen())})`}.${wLend() ? ` Tiền cho người khác mượn (${money(wLend())}) theo dõi riêng ở Ví & thẻ, không tính vào còn lại; khi họ trả thì cộng lại.` : ''} <a class="lk" role="button" tabindex="0" style="cursor:pointer" data-act="carry-edit">Chỉnh số tiền đầu kỳ</a></p>
+      <p class="small mt-2 carryf">${s.end !== null ? `Còn lại cuối tháng = <span class="nowrap">${fmt(s.carry)} <span class="muted">(tháng trước)</span></span> + <span class="nowrap t-green">${fmt(s.tin)} <span class="muted">(thu)</span></span> − <span class="nowrap">${fmt(s.tout)} <span class="muted">(chi)</span></span>${s.swipe ? ` + <span class="nowrap">${fmt(s.swipe)} <span class="muted">(quẹt thẻ, tiền chưa ra khỏi ví)</span></span>` : ''}${s.pay ? ` − <span class="nowrap">${fmt(s.pay)} <span class="muted">(trả thẻ)</span></span>` : ''}${s.lend ? ` ${s.lend > 0 ? '−' : '+'} <span class="nowrap">${fmt(Math.abs(s.lend))} <span class="muted">(${s.lend > 0 ? 'cho mượn' : 'nhận trả'})</span></span>` : ''}${s.adj ? ` ${s.adj > 0 ? '+' : '−'} <span class="nowrap">${fmt(Math.abs(s.adj))} <span class="muted">(chỉnh khi đối chiếu ví)</span></span>` : ''} = <b class="nowrap">${money(s.end)}</b>` : `Tháng này trước mốc ${monthLabel(carryStart())} nên chỉ tính thu − chi trong tháng.`}</p>
+      <p class="tiny muted mt-1">Còn lại = tiền đang có trong các ví (Ví & thẻ). Cộng dồn từ ${monthLabel(carryStart())}${state.carry && state.carry.auto ? ', đầu kỳ tính theo số dư các ví' : ` (đầu kỳ nhập tay ${money(carryOpen())})`}.${wCardDebt() && m === curMonth() ? ` Nợ thẻ còn phải trả ${money(wCardDebt())}.` : ''}${wLend() ? ` Tiền cho mượn (${money(wLend())}) theo dõi riêng, khi được trả thì cộng lại.` : ''} <a class="lk" role="button" tabindex="0" style="cursor:pointer" data-act="carry-edit">Chỉnh số tiền đầu kỳ</a></p>
       ${recoHTML(m, s)}${dcCard()}${'' && (state.wallets || []).length && m === curMonth() && s.end !== null ? (() => { const wn = wNet(iso(today())), d = wn - s.end; return `<p class="tiny mt-1 ${Math.abs(d) > 0 ? 't-amber' : 'muted'}">Ví & thẻ hiện có (tiền + cho mượn − nợ thẻ): <b>${money(wn)}</b>${Math.abs(d) > 0 ? ` · lệch <b>${money(d)}</b> so với sổ thu chi — thường do khoản chưa ghi, chưa gắn ví, hoặc số đầu kỳ chưa khớp (bấm “Chỉnh số tiền đầu kỳ” › Lấy theo Ví & thẻ).` : ' · khớp với sổ thu chi ✓'}</p>`; })() : ''}
       ${(state.wallets || []).length ? `<p class="tiny muted mt-2">Chuyển tiền giữa các ví và trả thẻ tín dụng không tính là thu chi — xem ở <a class="lk" role="button" tabindex="0" style="cursor:pointer" data-act="sub" data-tab="money" data-id="wallets">Ví & thẻ</a>. Quẹt thẻ tín dụng tính là chi ngay lúc quẹt.</p>` : ''}
       ${budgetCard(m)}
